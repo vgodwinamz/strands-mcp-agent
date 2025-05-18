@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Connect to MCP Server - Strands Agent</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="header">
+        <div class="container">
+            <h2>Strands Agent</h2>
+            <div class="nav-links">
+                <a href="/">Home</a>
+                <a href="/web/add_server">Add Server</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="card">
+            <h1>Connect to MCP Server</h1>
+            
+            <form action="/web/connect" method="post">
+                <div class="form-group">
+                    <label for="server_url">MCP Server:</label>
+                    <select id="server_url" name="server_url" required>
+                        {% for server in servers %}
+                        <option value="{{ server.url }}">{{ server.name }}</option>
+                        {% endfor %}
+                    </select>
+                    <div class="links" style="text-align: right; margin-top: 5px;">
+                        <a href="/web/add_server">Add New Server</a>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="region">Region:</label>
+                    <select id="region" name="region" required>
+                        {% for region in regions %}
+                        <option value="{{ region }}">{{ region }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="model_id">Model:</label>
+                    <select id="model_id" name="model_id" required>
+                        {% for model in models %}
+                        <option value="{{ model.id }}" data-region="{{ model.region }}">{{ model.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <button type="submit" class="btn">Connect</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <script>
+        // Filter models based on selected region
+        document.addEventListener('DOMContentLoaded', function() {
+            const regionSelect = document.getElementById('region');
+            const modelSelect = document.getElementById('model_id');
+            const allModels = Array.from(modelSelect.options);
+            
+            function filterModels() {
+                const selectedRegion = regionSelect.value;
+                
+                // Hide all models first
+                allModels.forEach(option => {
+                    option.style.display = 'none';
+                });
+                
+                // Show only models for the selected region
+                const filteredModels = allModels.filter(option => 
+                    option.dataset.region === selectedRegion
+                );
+                
+                filteredModels.forEach(option => {
+                    option.style.display = '';
+                });
+                
+                // Select the first available model
+                if (filteredModels.length > 0) {
+                    modelSelect.value = filteredModels[0].value;
+                }
+            }
+            
+            // Initial filter
+            filterModels();
+            
+            // Filter when region changes
+            regionSelect.addEventListener('change', filterModels);
+        });
+    </script>
+</body>
+</html>
