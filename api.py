@@ -6,18 +6,23 @@ import base64
 import json
 import re
 import markdown
+import concurrent.futures
 from typing import Dict, List, Optional, Any
 from urllib.parse import urlencode
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 import anyio
 import requests
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Form, Depends, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
-
+from fastapi.middleware.gzip import GZipMiddleware
 from strands import Agent
 from strands.tools.mcp import MCPClient
 from mcp.client.sse import sse_client
@@ -27,6 +32,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("strands-agent-api")
 
 app = FastAPI(title="Strands Agent API")
+
+# Add middleware for compression
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# Create a thread pool executor for handling queries
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
 # Set up templates
 templates = Jinja2Templates(directory="templates")
@@ -61,6 +72,21 @@ DEFAULT_MCP_SERVER = "https://mcp-pg.agentic-ai-aws.com/sse"
 # Global MCP client and agent
 global_mcp_client = None
 global_agent = None
+
+# No startup initialization - we'll initialize on demand when connecting
+@app.on_event("shutdown")
+async def shutdown_event():
+    global global_mcp_client, executor
+    
+    if global_mcp_client:
+        try:
+            logger.info("Shutting down MCP client")
+            global_mcp_client.__exit__(None, None, None)
+        except Exception as e:
+            logger.error(f"Error shutting down MCP client: {str(e)}")
+    
+    # Shutdown the executor
+    executor.shutdown(wait=False)
 
 # Function to format response text with proper HTML
 def format_response(text):
@@ -140,49 +166,6 @@ async def get_current_user(request: Request):
     if "user" not in session:
         return None
     return session["user"]
-
-# Initialize the global MCP client and agent
-@app.on_event("startup")
-async def startup_event():
-    global global_mcp_client, global_agent
-    
-    try:
-        # Create MCP client
-        logger.info(f"Initializing MCP client with server: {DEFAULT_MCP_SERVER}")
-        global_mcp_client = MCPClient(lambda: sse_client(DEFAULT_MCP_SERVER))
-        
-        # Enter the context manager
-        global_mcp_client.__enter__()
-        
-        # Get the tools from the MCP server
-        logger.info("Fetching available tools...")
-        tools = global_mcp_client.list_tools_sync()
-        
-        # Create an agent with these tools
-        logger.info("Creating agent with MCP tools")
-        global_agent = Agent(tools=tools)
-        
-        # Display available tools
-        logger.info(f"Available tools: {global_agent.tool_names}")
-        
-    except Exception as e:
-        logger.error(f"Error initializing MCP client: {str(e)}")
-        if global_mcp_client:
-            try:
-                global_mcp_client.__exit__(None, None, None)
-            except:
-                pass
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    global global_mcp_client
-    
-    if global_mcp_client:
-        try:
-            logger.info("Shutting down MCP client")
-            global_mcp_client.__exit__(None, None, None)
-        except Exception as e:
-            logger.error(f"Error shutting down MCP client: {str(e)}")
 
 # Authentication routes
 @app.get("/auth/login")
@@ -368,32 +351,32 @@ async def web_connect(
         import uuid
         session_id = str(uuid.uuid4())
         
-        # Initialize or reinitialize the MCP client with the selected server
-        if server_url != DEFAULT_MCP_SERVER or global_agent is None:
-            logger.info(f"Initializing MCP client with server: {server_url}")
-            
-            # Close existing client if any
-            if global_mcp_client:
-                try:
-                    global_mcp_client.__exit__(None, None, None)
-                except Exception as e:
-                    logger.error(f"Error closing existing MCP client: {str(e)}")
-            
-            # Create new client
-            global_mcp_client = MCPClient(lambda: sse_client(server_url))
-            
-            # Enter the context manager
-            global_mcp_client.__enter__()
-            
-            # Get the tools from the MCP server
-            logger.info("Fetching available tools...")
-            tools = global_mcp_client.list_tools_sync()
-            
-            # Create an agent with these tools
-            logger.info("Creating agent with MCP tools")
-            global_agent = Agent(tools=tools)
-            
-            logger.info(f"Available tools: {global_agent.tool_names}")
+        # Always reinitialize the MCP client with the selected server
+        logger.info(f"Initializing MCP client with server: {server_url}")
+        
+        # Close existing client if any
+        if global_mcp_client:
+            try:
+                global_mcp_client.__exit__(None, None, None)
+                global_mcp_client = None
+            except Exception as e:
+                logger.error(f"Error closing existing MCP client: {str(e)}")
+        
+        # Create new client
+        global_mcp_client = MCPClient(lambda: sse_client(server_url))
+        
+        # Enter the context manager
+        global_mcp_client.__enter__()
+        
+        # Get the tools from the MCP server
+        logger.info("Fetching available tools...")
+        tools = global_mcp_client.list_tools_sync()
+        
+        # Create an agent with these tools
+        logger.info("Creating agent with MCP tools")
+        global_agent = Agent(tools=tools)
+        
+        logger.info(f"Available tools: {global_agent.tool_names}")
         
         # Store session info
         clients[session_id] = {
@@ -486,7 +469,7 @@ async def web_query(
     query: str = Form(...)
 ):
     """Process a query from the web UI"""
-    global global_agent
+    global global_agent, executor
     
     # Check if user is authenticated
     user = await get_current_user(request)
@@ -514,8 +497,9 @@ async def web_query(
                 {"request": request, "error": "Agent not initialized"}
             )
         
-        # Process query
-        response = global_agent(query)
+        # Process query in a separate thread
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(executor, global_agent, query)
         
         # Add this exchange to chat history
         chat_history.append({"query": query, "response": response})
@@ -557,32 +541,32 @@ async def connect(request: ConnectRequest, req: Request):
         import uuid
         session_id = str(uuid.uuid4())
         
-        # Initialize or reinitialize the MCP client with the selected server
-        if request.server_url != DEFAULT_MCP_SERVER or global_agent is None:
-            logger.info(f"Initializing MCP client with server: {request.server_url}")
-            
-            # Close existing client if any
-            if global_mcp_client:
-                try:
-                    global_mcp_client.__exit__(None, None, None)
-                except Exception as e:
-                    logger.error(f"Error closing existing MCP client: {str(e)}")
-            
-            # Create new client
-            global_mcp_client = MCPClient(lambda: sse_client(request.server_url))
-            
-            # Enter the context manager
-            global_mcp_client.__enter__()
-            
-            # Get the tools from the MCP server
-            logger.info("Fetching available tools...")
-            tools = global_mcp_client.list_tools_sync()
-            
-            # Create an agent with these tools
-            logger.info("Creating agent with MCP tools")
-            global_agent = Agent(tools=tools)
-            
-            logger.info(f"Available tools: {global_agent.tool_names}")
+        # Always reinitialize the MCP client with the selected server
+        logger.info(f"Initializing MCP client with server: {request.server_url}")
+        
+        # Close existing client if any
+        if global_mcp_client:
+            try:
+                global_mcp_client.__exit__(None, None, None)
+                global_mcp_client = None
+            except Exception as e:
+                logger.error(f"Error closing existing MCP client: {str(e)}")
+        
+        # Create new client
+        global_mcp_client = MCPClient(lambda: sse_client(request.server_url))
+        
+        # Enter the context manager
+        global_mcp_client.__enter__()
+        
+        # Get the tools from the MCP server
+        logger.info("Fetching available tools...")
+        tools = global_mcp_client.list_tools_sync()
+        
+        # Create an agent with these tools
+        logger.info("Creating agent with MCP tools")
+        global_agent = Agent(tools=tools)
+        
+        logger.info(f"Available tools: {global_agent.tool_names}")
         
         # Store session info
         clients[session_id] = {
@@ -600,7 +584,7 @@ async def connect(request: ConnectRequest, req: Request):
 
 @app.post("/query", response_model=QueryResponse)
 async def query(request: QueryRequest, req: Request):
-    global global_agent
+    global global_agent, executor
     
     # Check if user is authenticated
     user = await get_current_user(req)
@@ -619,8 +603,9 @@ async def query(request: QueryRequest, req: Request):
         if not global_agent:
             raise HTTPException(status_code=500, detail="Agent not initialized")
         
-        # Process query
-        response = global_agent(request.query)
+        # Process query in a separate thread
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(executor, global_agent, request.query)
         
         # Add to chat history
         chat_history.append({"query": request.query, "response": response})
@@ -644,11 +629,16 @@ async def cleanup_session(session_id: str, background_tasks: BackgroundTasks, re
         return {"message": "Session cleaned up"}
     raise HTTPException(status_code=404, detail="Session not found")
 
-# Health check endpoint
+# Health check endpoint - simplified for ELB
 @app.get("/health")
 def health_check():
-    return {"status": "healthy"}
+    return PlainTextResponse("OK", status_code=200)
+
+# Root path for ELB health checks
+@app.get("/")
+def root():
+    return PlainTextResponse("OK", status_code=200)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=5001)
+    uvicorn.run(app, host="0.0.0.0", port=5001, timeout_keep_alive=300)
