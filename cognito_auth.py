@@ -7,8 +7,8 @@ class CognitoAuth:
     def __init__(self):
         self.client = boto3.client('cognito-idp', region_name=os.environ.get('AWS_REGION','us-west-2'))
         # Get these values from environment variables
-        self.user_pool_id = os.environ.get('COGNITO_USER_POOL_ID','us-west-2_ZLBGBXKuk') #['COGNITO_USER_POOL_ID']
-        self.client_id = os.environ.get('COGNITO_CLIENT_ID','6q2p7gc1qh0bnvead11cjti3co') #['COGNITO_CLIENT_ID']
+        self.user_pool_id = os.environ.get('COGNITO_USER_POOL_ID','<user pool ID>') #['COGNITO_USER_POOL_ID']
+        self.client_id = os.environ.get('COGNITO_CLIENT_ID','<Cognito Client ID>') #['COGNITO_CLIENT_ID']
 
         print("user_pool_id :" + self.user_pool_id)
         print("client_id :" + self.client_id)
