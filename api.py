@@ -49,14 +49,14 @@ app.mount("/static", StaticFiles(directory="templates"), name="static")
 clients = {}
 
 # Cognito configuration
-COGNITO_DOMAIN = os.environ.get("COGNITO_DOMAIN", "mcp-client-server.auth.us-west-2.amazoncognito.com")
-COGNITO_CLIENT_ID = os.environ.get("COGNITO_CLIENT_ID", "6q2p7gc1qh0bnvead11cjti3co")
-COGNITO_CLIENT_SECRET = os.environ.get("COGNITO_CLIENT_SECRET", "1a1gib8oknn2rigbcrvspcjlfj5r2f7iqg4kcgsee361t16lf8r9")
+COGNITO_DOMAIN = os.environ.get("COGNITO_DOMAIN", "<Cognito Domain>")
+COGNITO_CLIENT_ID = os.environ.get("COGNITO_CLIENT_ID", "Client ID")
+COGNITO_CLIENT_SECRET = os.environ.get("COGNITO_CLIENT_SECRET", "Client Secret")
 # Use localhost for local development
-COGNITO_REDIRECT_URI = os.environ.get("COGNITO_REDIRECT_URI", "https://strands-mcp.agentic-ai-aws.com/auth/callback")
-COGNITO_LOGOUT_URI = os.environ.get("COGNITO_LOGOUT_URI", "https://strands-mcp.agentic-ai-aws.com/logout")
+COGNITO_REDIRECT_URI = os.environ.get("COGNITO_REDIRECT_URI", "<call back app URL>/auth/callback")
+COGNITO_LOGOUT_URI = os.environ.get("COGNITO_LOGOUT_URI", "<app logout URL>/logout")
 COGNITO_REGION = os.environ.get("AWS_REGION", "us-west-2")
-COGNITO_USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "us-west-2_ZLBGBXKuk")
+COGNITO_USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "<User Pool ID>")
 
 # Add session middleware to the app
 app.add_middleware(
