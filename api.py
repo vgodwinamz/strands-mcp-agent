@@ -384,7 +384,8 @@ async def web_connect(
             "region": region,
             "model_id": model_id,
             "chat_history": [],
-            "access_token": user.get("access_token")
+            "access_token": user.get("access_token"),
+            "agent": Agent(tools=tools)
         }
         
         return templates.TemplateResponse(
@@ -469,7 +470,7 @@ async def web_query(
     query: str = Form(...)
 ):
     """Process a query from the web UI"""
-    global global_agent, executor
+    #global global_agent, executor
     
     # Check if user is authenticated
     user = await get_current_user(request)
@@ -490,16 +491,17 @@ async def web_query(
         model_id = client_info.get("model_id", "anthropic.claude-3-5-sonnet-20240620-v2:0")
         chat_history = client_info.get("chat_history", [])
         
-        # Check if agent is initialized
-        if not global_agent:
+        # Use session's agent instead of global agent
+        session_agent = client_info.get("agent")
+        if not session_agent:
             return templates.TemplateResponse(
                 "error.html", 
-                {"request": request, "error": "Agent not initialized"}
+                {"request": request, "error": "Agent not initialized for this session"}
             )
-        
-        # Process query in a separate thread
+
+        # Process query using the session's agent
         loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(executor, global_agent, query)
+        response = await loop.run_in_executor(executor, session_agent, query)
         
         # Add this exchange to chat history
         chat_history.append({"query": query, "response": response})
@@ -568,14 +570,16 @@ async def connect(request: ConnectRequest, req: Request):
         
         logger.info(f"Available tools: {global_agent.tool_names}")
         
-        # Store session info
+        # Store session info with dedicated agent
         clients[session_id] = {
             "server_url": request.server_url,
             "region": request.region,
             "model_id": request.model_id,
             "chat_history": [],
-            "access_token": user.get("access_token")
+            "access_token": user.get("access_token"),
+            "agent": Agent(tools=tools)  # Store dedicated agent for this session
         }
+
         
         return ConnectResponse(session_id=session_id, connected=True)
     except Exception as e:
@@ -596,17 +600,18 @@ async def query(request: QueryRequest, req: Request):
         client_info = clients.get(request.session_id)
         if not client_info:
             raise HTTPException(status_code=404, detail="Session not found")
-        
+
         chat_history = client_info.get("chat_history", [])
-        
-        # Check if agent is initialized
-        if not global_agent:
-            raise HTTPException(status_code=500, detail="Agent not initialized")
-        
-        # Process query in a separate thread
+
+        # Use session's agent instead of global agent
+        session_agent = client_info.get("agent")
+        if not session_agent:
+            raise HTTPException(status_code=500, detail="Agent not initialized for this session")
+
+        # Process query using the session's agent
         loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(executor, global_agent, request.query)
-        
+        response = await loop.run_in_executor(executor, session_agent, request.query)
+                
         # Add to chat history
         chat_history.append({"query": request.query, "response": response})
         client_info["chat_history"] = chat_history
